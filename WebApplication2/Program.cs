@@ -25,7 +25,13 @@ builder.Services.AddHttpClient("MyHttpClient", client =>
     client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 }).AddResilienceHandler("CustomPipeline", builder =>
 {
-    builder.AddCircuitBreaker(new HttpCircuitBreakerStrategyOptions
+    builder.AddRetry(new HttpRetryStrategyOptions
+    {
+        
+        MaxRetryAttempts = 3,
+        Delay = TimeSpan.FromSeconds(2),
+       
+    }).AddCircuitBreaker(new HttpCircuitBreakerStrategyOptions
     {
         SamplingDuration = TimeSpan.FromSeconds(40),
         FailureRatio = 0.5, // 50% failure ratio means 2 out of 4 requests need to fail
@@ -36,9 +42,54 @@ builder.Services.AddHttpClient("MyHttpClient", client =>
             args.Outcome.Result?.StatusCode == HttpStatusCode.ServiceUnavailable ||
             args.Outcome.Exception!=null?
             args.Outcome.Exception.Message.Contains("No connection could be made because the target machine actively refused"): args.Outcome.Result?.StatusCode == HttpStatusCode.ServiceUnavailable)
+    }).AddTimeout(new HttpTimeoutStrategyOptions
+    {
+        Timeout = TimeSpan.FromSeconds(10), // Set the timeout to 10 seconds
+    }).AddFallback(new FallbackStrategyOptions<HttpResponseMessage>
+    {
+        ShouldHandle = args => ValueTask.FromResult(
+            args.Outcome.Result?.StatusCode == HttpStatusCode.InternalServerError ||
+            args.Outcome.Exception != null),
+        FallbackAction = async context =>
+        {
+            // Log the error
+           // var logger = context.ServiceProvider.GetRequiredService<ILogger<Program>>();
+            //logger.LogError("Request failed. Executing fallback.");
+
+            // Create a custom response
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("This is a fallback response.")
+            };
+
+            return await Outcome.FromResultAsValueTask(response);
+        }
+    
+    }); ;
+});
+
+
+
+builder.Services.AddHttpClient("MyHttpClient2", client =>
+{
+    client.BaseAddress = new Uri("https://localhost:7032");
+    client.DefaultRequestHeaders.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
+}).AddResilienceHandler("CustomPipeline", builder =>
+{
+    builder.AddCircuitBreaker(new HttpCircuitBreakerStrategyOptions
+    {
+        SamplingDuration = TimeSpan.FromSeconds(120),
+        FailureRatio = 0.5, // 50% failure ratio means 2 out of 4 requests need to fail
+        MinimumThroughput = 12, // Minimum number of requests to evaluate
+        BreakDuration = TimeSpan.FromSeconds(30), // Time to keep the circuit open
+        ShouldHandle = args => ValueTask.FromResult(
+            args.Outcome.Result?.StatusCode == HttpStatusCode.RequestTimeout ||
+            args.Outcome.Result?.StatusCode == HttpStatusCode.ServiceUnavailable ||
+            args.Outcome.Exception != null ?
+            args.Outcome.Exception.Message.Contains("No connection could be made because the target machine actively refused") : args.Outcome.Result?.StatusCode == HttpStatusCode.ServiceUnavailable)
     }).AddRetry(new HttpRetryStrategyOptions
     {
-        
+
         MaxRetryAttempts = 3,
         Delay = TimeSpan.FromSeconds(2),
         ShouldHandle = args => ValueTask.FromResult(
